@@ -7,7 +7,9 @@
 
    A machine is created with named state transition functions. Each
    function receives the context map and returns a map where:
-     - Keys matching an effect handler key → that effect is executed
+     - Values that are vectors whose first element is a key in the fx
+       handlers map → that effect is executed, and the result is stored
+       under the map entry's key in the context
      - :biff.fx/next → the next state to transition to
      - Other keys → merged into context for subsequent states
 
@@ -64,20 +66,29 @@
         results (if (map? result) [result] result)
         results (mapv
                  (fn [m]
-                   (let [state-output (apply dissoc m (keys handlers))
-                         fx-input (select-keys m (keys handlers))
+                   (let [effect-entry? (fn [[_ v]]
+                                         (and (vector? v)
+                                              (seq v)
+                                              (contains? handlers (first v))))
+                         effect-keys (set (map key (filter effect-entry? m)))
+                         state-output (apply dissoc m effect-keys)
+                         fx-input (select-keys m effect-keys)
                          ctx (merge ctx state-output)
                          fx-output
                          (into {}
                                (map (fn [[k v]]
-                                      [k (try
-                                           ((get handlers k) ctx v)
-                                           (catch Exception e
-                                             (throw
-                                              (ex-info
-                                               "Exception while running biff.fx effect"
-                                               (truncate {:effect k :input v})
-                                               e))))]))
+                                      (let [handler-key (first v)
+                                            handler-args (rest v)]
+                                        [k (try
+                                             (apply (get handlers handler-key) ctx handler-args)
+                                             (catch Exception e
+                                               (throw
+                                                (ex-info
+                                                 "Exception while running biff.fx effect"
+                                                 (truncate {:effect handler-key
+                                                            :key k
+                                                            :input (vec handler-args)})
+                                                 e))))])))
                                fx-input)]
                      {:biff.fx/state-output state-output
                       :biff.fx/fx-input fx-input
@@ -146,9 +157,7 @@
 
 ;; === Routing ===
 
-(defn safe-for-url?
-  "Returns true if the string contains only URL-safe characters."
-  [s]
+(defn- safe-for-url? [s]
   (boolean (re-matches #"[a-zA-Z0-9-_.+!*]+" s)))
 
 (defn- autogen-endpoint [ns* sym]
@@ -158,36 +167,40 @@
               (str "URL segment would contain invalid characters: " segment)))
     href))
 
-(let [all-methods [:get :post :put :delete :head :options :trace :patch :connect]]
-  (defn route*
-    "Creates a route vector [uri handler-map] from a URI, route name, and
-     state->transition-fn map. Methods present in the state map are included
-     as handlers."
-    [uri route-name & {:as state->transition-fn}]
-    (let [machine* (machine route-name state->transition-fn)]
-      [uri
-       (into {:name route-name}
-             (comp (filter state->transition-fn)
-                   (map (fn [method]
-                          [method machine*])))
-             all-methods)])))
+(def ^:private all-methods
+  [:get :post :put :delete :head :options :trace :patch :connect])
 
-(defn wrap-pathom
-  "Wraps a function so that it receives both ctx and the :biff.fx/pathom
-   value from ctx."
+(defn- route*
+  [uri route-name & {:as state->transition-fn}]
+  (let [machine* (machine route-name state->transition-fn)]
+    [uri
+     (into {:name route-name}
+           (comp (filter state->transition-fn)
+                 (map (fn [method]
+                        [method machine*])))
+           all-methods)]))
+
+(defn- wrap-result
   [f]
   (fn [ctx]
-    (f ctx (:biff.fx/pathom ctx))))
+    (f ctx (:biff.fx/result ctx))))
 
-(defn wrap-hiccup
-  "Wraps a function so that if it returns a hiccup vector (a vector starting
-   with a keyword), the result is wrapped in {:body result}."
+(defn- wrap-hiccup
   [f]
   (fn [& args]
     (let [result (apply f args)]
       (if (and (vector? result) (keyword? (first result)))
         {:body result}
         result))))
+
+(defn- wrap-methods
+  [params wrapper-fn]
+  (reduce (fn [m method]
+            (if (contains? m method)
+              (update m method wrapper-fn)
+              m))
+          params
+          all-methods))
 
 (defmacro defroute
   "Defines a route var with auto-generated or explicit URI.
@@ -198,42 +211,33 @@
        :post (fn [ctx] ...))
 
      (defroute my-route  ; URI auto-generated from namespace and symbol
-       :get (fn [ctx] ...))"
-  [sym & args]
-  (let [[uri & kvs] (if (string? (first args))
-                      args
-                      (into [nil] args))
-        uri (or uri (autogen-endpoint *ns* sym))
-        route-name (keyword (str *ns*) (str sym))]
-    `(def ~sym
-       (let [[& {:as params#}] [~@kvs]]
-         (route* ~uri
-                 ~route-name
-                 (-> params#
-                     (update-vals wrap-hiccup)
-                     (merge {:start (fn [{:keys [~'request-method]}]
-                                      {:biff.fx/next ~'request-method})})))))))
+       :get (fn [ctx] ...))
 
-(defmacro defroute-pathom
-  "Like `defroute`, but also runs a Pathom query before dispatching to the
-   method handler. Handler functions receive both ctx and the Pathom result.
-
-   Usage:
-     (defroute-pathom my-route \"/path\" [:some/query]
-       :get (fn [ctx pathom-result] ...))"
+     (defroute my-route \"/path\"
+       [:biff.fx/pathom [{:session/user [:user/email]}]]
+       :get (fn [ctx {:keys [session/user]}] ...))"
   [sym & args]
-  (let [[uri query & kvs] (if (string? (first args))
+  (let [[uri & rest-args] (if (string? (first args))
                             args
                             (into [nil] args))
         uri (or uri (autogen-endpoint *ns* sym))
-        route-name (keyword (str *ns*) (str sym))]
+        [initial-fx & kvs] (if (vector? (first rest-args))
+                             rest-args
+                             (into [nil] rest-args))
+        route-name (keyword (str *ns*) (str sym))
+        initial-fx-sym (gensym "initial-fx")
+        params-sym (gensym "params")]
     `(def ~sym
-       (let [query# ~query
-             [& {:as params#}] [~@kvs]]
-         (route* ~uri
-                 ~route-name
-                 (-> params#
-                     (update-vals (comp wrap-hiccup wrap-pathom))
-                     (merge {:start (fn [{:keys [~'request-method]}]
-                                      {:biff.fx/pathom query#
-                                       :biff.fx/next ~'request-method})})))))))
+       (let [~initial-fx-sym ~initial-fx
+             [& {:as ~params-sym}] [~@kvs]]
+         (@#'route* ~uri
+                    ~route-name
+                    (-> ~params-sym
+                        (update-vals @#'wrap-hiccup)
+                        ~@(when initial-fx
+                            [`(@#'wrap-methods @#'wrap-result)])
+                        (merge {:start (fn [{:keys [~'request-method]}]
+                                         ~(if initial-fx
+                                            `{:biff.fx/result ~initial-fx-sym
+                                              :biff.fx/next ~'request-method}
+                                            `{:biff.fx/next ~'request-method}))})))))))
