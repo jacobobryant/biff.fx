@@ -1,6 +1,7 @@
 (ns com.biffweb.fx-test
   (:require [clojure.test :refer [deftest is testing]]
-            [com.biffweb.fx :as fx]))
+            [com.biffweb.fx :as fx]
+            [com.biffweb.fx.impl :as impl]))
 
 ;; === Machine basics ===
 
@@ -152,17 +153,18 @@
 ;; === Routing ===
 
 (deftest safe-for-url-accepts-valid
-  (is (#'fx/safe-for-url? "hello-world_123"))
-  (is (#'fx/safe-for-url? "a.b.c"))
-  (is (#'fx/safe-for-url? "foo+bar")))
+  (is (impl/safe-for-url? "hello-world_123"))
+  (is (impl/safe-for-url? "a.b.c"))
+  (is (impl/safe-for-url? "foo+bar")))
 
 (deftest safe-for-url-rejects-invalid
-  (is (not (#'fx/safe-for-url? "hello world")))
-  (is (not (#'fx/safe-for-url? "foo/bar")))
-  (is (not (#'fx/safe-for-url? ""))))
+  (is (not (impl/safe-for-url? "hello world")))
+  (is (not (impl/safe-for-url? "foo/bar")))
+  (is (not (impl/safe-for-url? ""))))
 
 (deftest route-star-creates-route-vector
-  (let [[uri handler-map] (#'fx/route* "/test" ::test-route
+  (let [[uri handler-map] (impl/route* "/test" ::test-route
+                            fx/machine
                             :start (fn [{:keys [request-method]}]
                                      {:biff.fx/next request-method})
                             :get (fn [_] {:status 200}))]
@@ -172,15 +174,15 @@
     (is (nil? (:post handler-map)))))
 
 (deftest wrap-hiccup-wraps-vectors
-  (let [f (#'fx/wrap-hiccup (fn [] [:div "hello"]))]
+  (let [f (impl/wrap-hiccup (fn [] [:div "hello"]))]
     (is (= {:body [:div "hello"]} (f)))))
 
 (deftest wrap-hiccup-passes-maps
-  (let [f (#'fx/wrap-hiccup (fn [] {:status 200}))]
+  (let [f (impl/wrap-hiccup (fn [] {:status 200}))]
     (is (= {:status 200} (f)))))
 
 (deftest wrap-result-passes-result-from-ctx
-  (let [f (#'fx/wrap-result (fn [ctx result] {:ctx-keys (keys ctx) :result result}))]
+  (let [f (impl/wrap-result (fn [ctx result] {:ctx-keys (keys ctx) :result result}))]
     (is (= {:ctx-keys [:biff.fx/result] :result {:user "data"}}
            (f {:biff.fx/result {:user "data"}})))))
 
