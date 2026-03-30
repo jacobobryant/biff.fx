@@ -13,7 +13,8 @@
    data))
 
 (defn step [{:keys [state->transition-fn ctx state trace]}]
-  (let [{:keys [biff.fx/handlers]} ctx
+  (let [handlers (merge (:biff.fx/default-handlers ctx)
+                        (:biff.fx/handlers ctx))
         last-results (->> (some-> trace peek :biff.fx/results)
                           (mapv :biff.fx/fx-output)
                           (filterv not-empty))
