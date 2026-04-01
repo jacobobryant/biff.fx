@@ -76,9 +76,7 @@
                            e))))]
          (if next-state
            (recur ctx next-state trace)
-           (if-let [output-fn (:biff.fx/output-fn ctx)]
-             (output-fn ctx)
-             state-output)))))))
+           state-output))))))
 
 (defmacro defmachine
   "Defines a machine as a var. Machine name keyword is derived from
@@ -100,13 +98,14 @@
    Usage:
      (defresolver my-resolver
        {:input [:foo]
-        :output [:bar]}
+        :output [:bar :baz]}
        [ctx input]
-       (let [result [:biff.fx/sqlite {:select [:*] :from [:bar]}]]
-         {:bar result})
+       {:bar [:biff.fx/sqlite {:select [:*] :from [:bar]}]
+        :biff.fx/next :next-state}
 
        :next-state
-       (fn [{:keys [bar]}] ...))
+       (fn [{:keys [bar]}]
+         {:baz (count bar)}))
 
    The first form after the parameter vector is the main resolver body.
    Remaining keyword/fn pairs (if any) define additional machine states.
@@ -119,54 +118,27 @@
         [params body & state-kvs] args
         machine-name (keyword (str *ns*) (str sym))
         ctx-sym (first params)
-        input-sym (second params)]
+        input-sym (second params)
+        auto-next-sym (gensym "auto-next")]
     `(let [start-fn# (fn [~ctx-sym ~input-sym] ~body)
            output-keys# ~(vec output)
+           ~auto-next-sym (fn [f#]
+                            (fn [ctx#]
+                              (let [result# (f# ctx#)]
+                                (if (:biff.fx/next result#)
+                                  result#
+                                  (assoc result# :biff.fx/next ::return-output)))))
            m# (machine ~machine-name
-                 :start (fn [{resolver-input# :biff.fx/resolver-input :as ctx#}]
-                          (start-fn# ctx# resolver-input#))
-                 ~@state-kvs)]
+                 :start (~auto-next-sym
+                          (fn [{resolver-input# :biff.fx/resolver-input :as ctx#}]
+                            (start-fn# ctx# resolver-input#)))
+                 ::return-output (fn [ctx#] (select-keys ctx# output-keys#))
+                 ~@(mapcat (fn [[k v]] [k `(~auto-next-sym ~v)]) (partition 2 state-kvs)))]
        (defn ~sym
          ~(merge (when (seq input) {:input input})
                  {:output output})
          [ctx# input#]
-         (m# (assoc ctx#
-                    :biff.fx/resolver-input input#
-                    :biff.fx/output-fn (fn [ctx#] (select-keys ctx# output-keys#))))))))
-
-;; === Default handlers ===
-
-(def default-handlers
-  "Default effect handler map. Merged with :biff.fx/handlers."
-  {:biff.fx/http
-   (fn [_ctx map-or-vec]
-     (let [hato-request (requiring-resolve 'hato.client/request)]
-       (if (map? map-or-vec)
-         (hato-request map-or-vec)
-         (mapv hato-request map-or-vec))))
-
-   :biff.fx/graph
-   (fn [& args]
-     (apply (requiring-resolve 'com.biffweb.graph/query) args))
-
-   :biff.fx/slurp
-   (fn [_ctx & args]
-     (apply slurp args))
-
-   :biff.fx/spit
-   (fn [_ctx & args]
-     (apply spit args))
-
-   :biff.fx/sleep
-   (fn [_ctx sleep-ms]
-     (Thread/sleep (long sleep-ms)))
-
-   :biff.fx/temp-dir
-   (fn [_ctx & {:keys [prefix]}]
-     (let [dir (java.nio.file.Files/createTempDirectory
-                (or prefix "biff")
-                (into-array java.nio.file.attribute.FileAttribute []))]
-       (.toFile dir)))})
+         (m# (assoc ctx# :biff.fx/resolver-input input#))))))
 
 ;; === Routing ===
 

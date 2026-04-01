@@ -12,9 +12,52 @@
    (fn [data] (if (string? data) (truncate-str data 500) data))
    data))
 
+(def ^:private default-handlers
+  {:biff.fx/http
+   (fn [_ctx & args]
+     (let [hato-request (requiring-resolve 'hato.client/request)
+           http* (fn [request]
+                   (try
+                     (-> (hato-request request)
+                         (assoc :url (:url request))
+                         (dissoc :http-client))
+                     (catch Exception e
+                       (if (get request :throw-exceptions true)
+                         (throw e)
+                         {:url (:url request)
+                          :exception e}))))]
+       (if (and (= 1 (count args)) (map? (first args)))
+         (http* (first args))
+         (let [requests (if (and (= 1 (count args)) (sequential? (first args)))
+                          (first args)
+                          args)]
+           (mapv http* requests)))))
+
+   :biff.fx/graph
+   (fn [& args]
+     (apply (requiring-resolve 'com.biffweb.graph/query) args))
+
+   :biff.fx/slurp
+   (fn [_ctx & args]
+     (apply slurp args))
+
+   :biff.fx/spit
+   (fn [_ctx & args]
+     (apply spit args))
+
+   :biff.fx/sleep
+   (fn [_ctx sleep-ms]
+     (Thread/sleep (long sleep-ms)))
+
+   :biff.fx/temp-dir
+   (fn [_ctx & {:keys [prefix]}]
+     (let [dir (java.nio.file.Files/createTempDirectory
+                (or prefix "biff")
+                (into-array java.nio.file.attribute.FileAttribute []))]
+       (.toFile dir)))})
+
 (defn step [{:keys [state->transition-fn ctx state trace]}]
-  (let [handlers (merge (:biff.fx/default-handlers ctx)
-                        (:biff.fx/handlers ctx))
+  (let [handlers (merge default-handlers (:biff.fx/handlers ctx))
         last-results (->> (some-> trace peek :biff.fx/results)
                           (mapv :biff.fx/fx-output)
                           (filterv not-empty))

@@ -289,28 +289,18 @@
   (is (= {:global-val 42}
          (no-input-resolver {:biff.fx/handlers {}} {}))))
 
-;; === Default handlers ===
+;; === Default handlers (built-in, automatically merged) ===
 
-(deftest default-handlers-contains-expected-keys
-  (is (contains? fx/default-handlers :biff.fx/graph))
-  (is (contains? fx/default-handlers :biff.fx/http))
-  (is (contains? fx/default-handlers :biff.fx/slurp))
-  (is (contains? fx/default-handlers :biff.fx/spit))
-  (is (contains? fx/default-handlers :biff.fx/sleep))
-  (is (contains? fx/default-handlers :biff.fx/temp-dir)))
-
-(deftest default-handlers-merged-via-context
+(deftest default-handlers-auto-merged
   (let [m (fx/machine ::default-test
             :start (fn [_] {:result [:biff.fx/custom 5] :biff.fx/next :done})
             :done (fn [{:keys [result]}] {:result result}))]
     (is (= {:result 10}
-           (m {:biff.fx/default-handlers fx/default-handlers
-               :biff.fx/handlers {:biff.fx/custom (fn [_ n] (* 2 n))}})))))
+           (m {:biff.fx/handlers {:biff.fx/custom (fn [_ n] (* 2 n))}})))))
 
 (deftest default-handlers-overridden-by-handlers
   (let [m (fx/machine ::override-test
             :start (fn [_] {:result [:biff.fx/slurp "test"] :biff.fx/next :done})
             :done (fn [{:keys [result]}] {:result result}))]
     (is (= {:result "custom-slurp"}
-           (m {:biff.fx/default-handlers fx/default-handlers
-               :biff.fx/handlers {:biff.fx/slurp (fn [_ & _] "custom-slurp")}})))))
+           (m {:biff.fx/handlers {:biff.fx/slurp (fn [_ & _] "custom-slurp")}})))))
