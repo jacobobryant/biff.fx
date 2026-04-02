@@ -14,7 +14,7 @@
 
 (def ^:private default-handlers
   {:biff.fx/http
-   (fn [_ctx & args]
+   (fn [_ctx request-or-requests]
      (let [hato-request (requiring-resolve 'hato.client/request)
            http* (fn [request]
                    (try
@@ -26,12 +26,9 @@
                          (throw e)
                          {:url (:url request)
                           :exception e}))))]
-       (if (and (= 1 (count args)) (map? (first args)))
-         (http* (first args))
-         (let [requests (if (and (= 1 (count args)) (sequential? (first args)))
-                          (first args)
-                          args)]
-           (mapv http* requests)))))
+       (if (map? request-or-requests)
+         (http* request-or-requests)
+         (mapv http* request-or-requests))))
 
    :biff.fx/graph
    (fn [& args]
@@ -108,7 +105,8 @@
      :ctx (merge ctx fx-output state-output
                  {:biff.fx/trace trace :biff.fx/fx-input fx-input})
      :trace trace
-     :state-output state-output}))
+     :state-output state-output
+     :fx-output fx-output}))
 
 (def all-methods
   [:get :post :put :delete :head :options :trace :patch :connect])

@@ -63,7 +63,7 @@
       ctx))
     ([ctx]
      (loop [ctx ctx, state :start, trace []]
-       (let [{:keys [next-state ctx trace state-output]}
+       (let [{:keys [next-state ctx trace state-output fx-output]}
              (try
                (impl/step {:state->transition-fn state->transition-fn
                            :ctx ctx :state state :trace trace})
@@ -76,7 +76,7 @@
                            e))))]
          (if next-state
            (recur ctx next-state trace)
-           state-output))))))
+           (merge state-output fx-output)))))))
 
 (defmacro defmachine
   "Defines a machine as a var. Machine name keyword is derived from
@@ -118,22 +118,12 @@
         [params body & state-kvs] args
         machine-name (keyword (str *ns*) (str sym))
         ctx-sym (first params)
-        input-sym (second params)
-        auto-next-sym (gensym "auto-next")]
+        input-sym (second params)]
     `(let [start-fn# (fn [~ctx-sym ~input-sym] ~body)
-           output-keys# ~(vec output)
-           ~auto-next-sym (fn [f#]
-                            (fn [ctx#]
-                              (let [result# (f# ctx#)]
-                                (if (:biff.fx/next result#)
-                                  result#
-                                  (assoc result# :biff.fx/next ::return-output)))))
            m# (machine ~machine-name
-                 :start (~auto-next-sym
-                          (fn [{resolver-input# :biff.fx/resolver-input :as ctx#}]
-                            (start-fn# ctx# resolver-input#)))
-                 ::return-output (fn [ctx#] (select-keys ctx# output-keys#))
-                 ~@(mapcat (fn [[k v]] [k `(~auto-next-sym ~v)]) (partition 2 state-kvs)))]
+                 :start (fn [{resolver-input# :biff.fx/resolver-input :as ctx#}]
+                          (start-fn# ctx# resolver-input#))
+                 ~@state-kvs)]
        (defn ~sym
          ~(merge (when (seq input) {:input input})
                  {:output output})
