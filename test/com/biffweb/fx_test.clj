@@ -304,3 +304,20 @@
             :done (fn [{:keys [result]}] {:result result}))]
     (is (= {:result "custom-slurp"}
            (m {:biff.fx/handlers {:biff.fx/slurp (fn [_ & _] "custom-slurp")}})))))
+
+(deftest machine-filters-underscore-keys-from-fx-output
+  (let [m (fx/machine ::underscore-test
+            :start (fn [_] {:_internal [:biff.fx/load "x"]
+                            :visible [:biff.fx/load "y"]}))]
+    (is (= {:visible "loaded-y"}
+           (m {:biff.fx/handlers
+               {:biff.fx/load (fn [_ v] (str "loaded-" v))}})))))
+
+(deftest machine-underscore-keys-available-during-transitions
+  (let [m (fx/machine ::underscore-ctx-test
+            :start (fn [_] {:_temp [:biff.fx/load "data"]
+                            :biff.fx/next :use-it})
+            :use-it (fn [{:keys [_temp]}] {:result (str "used-" _temp)}))]
+    (is (= {:result "used-loaded"}
+           (m {:biff.fx/handlers
+               {:biff.fx/load (fn [_ _] "loaded")}})))))
