@@ -229,3 +229,95 @@
         handler (:get handler-map)]
     (is (= {:status 200}
            (handler {:request-method :get :biff.fx/handlers {}})))))
+
+;; === defresolver macro ===
+
+(fx/defresolver test-resolver
+  {:input [:x]
+   :output [:y]}
+  [ctx {:keys [x]}]
+  {:y (* x 2)})
+
+(deftest defresolver-creates-var-with-metadata
+  (is (fn? test-resolver))
+  (is (= [:x] (:input (meta #'test-resolver))))
+  (is (= [:y] (:output (meta #'test-resolver)))))
+
+(deftest defresolver-runs-as-resolver
+  (is (= {:y 10}
+         (test-resolver {:biff.fx/handlers {}} {:x 5}))))
+
+(fx/defresolver effectful-resolver
+  {:input [:id]
+   :output [:data]}
+  [ctx {:keys [id]}]
+  {:data [:biff.fx/load id]})
+
+(deftest defresolver-runs-effects
+  (is (= {:data {:loaded 42}}
+         (effectful-resolver
+          {:biff.fx/handlers {:biff.fx/load (fn [_ id] {:loaded id})}}
+          {:id 42}))))
+
+(fx/defresolver multi-state-resolver
+  {:input [:id]
+   :output [:result]}
+  [ctx {:keys [id]}]
+  {:raw [:biff.fx/load id]
+   :biff.fx/next :process}
+
+  :process
+  (fn [{:keys [raw]}]
+    {:result (str "processed-" raw)}))
+
+(deftest defresolver-with-multiple-states
+  (is (= {:result "processed-data"}
+         (multi-state-resolver
+          {:biff.fx/handlers {:biff.fx/load (fn [_ _] "data")}}
+          {:id 1}))))
+
+(fx/defresolver no-input-resolver
+  {:output [:global-val]}
+  [ctx _]
+  {:global-val 42})
+
+(deftest defresolver-omits-empty-input
+  (is (nil? (:input (meta #'no-input-resolver))))
+  (is (= [:global-val] (:output (meta #'no-input-resolver)))))
+
+(deftest defresolver-no-input-runs
+  (is (= {:global-val 42}
+         (no-input-resolver {:biff.fx/handlers {}} {}))))
+
+;; === Default handlers (built-in, automatically merged) ===
+
+(deftest default-handlers-auto-merged
+  (let [m (fx/machine ::default-test
+            :start (fn [_] {:result [:biff.fx/custom 5] :biff.fx/next :done})
+            :done (fn [{:keys [result]}] {:result result}))]
+    (is (= {:result 10}
+           (m {:biff.fx/handlers {:biff.fx/custom (fn [_ n] (* 2 n))}})))))
+
+(deftest default-handlers-overridden-by-handlers
+  (let [m (fx/machine ::override-test
+            :start (fn [_] {:result [:biff.fx/slurp "test"] :biff.fx/next :done})
+            :done (fn [{:keys [result]}] {:result result}))]
+    (is (= {:result "custom-slurp"}
+           (m {:biff.fx/handlers {:biff.fx/slurp (fn [_ & _] "custom-slurp")}})))))
+
+(deftest machine-filters-underscore-keys-from-fx-output
+  (let [m (fx/machine ::underscore-test
+            :start (fn [_] {:_internal [:biff.fx/load "x"]
+                            :visible [:biff.fx/load "y"]}))]
+    (is (= {:visible "loaded-y"}
+           (m {:biff.fx/handlers
+               {:biff.fx/load (fn [_ v] (str "loaded-" v))}})))))
+
+(deftest machine-underscore-keys-available-during-transitions
+  (let [m (fx/machine ::underscore-ctx-test
+            :start (fn [_] {:_temp [:biff.fx/load "data"]
+                            :biff.fx/next :use-it})
+            :use-it (fn [{:keys [_temp]}] {:result (str "used-" _temp)}))]
+    (is (= {:result "used-loaded"}
+           (m {:biff.fx/handlers
+               {:biff.fx/load (fn [_ _] "loaded")}})))))

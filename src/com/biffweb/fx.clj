@@ -63,7 +63,7 @@
       ctx))
     ([ctx]
      (loop [ctx ctx, state :start, trace []]
-       (let [{:keys [next-state ctx trace state-output]}
+       (let [{:keys [next-state ctx trace state-output fx-output]}
              (try
                (impl/step {:state->transition-fn state->transition-fn
                            :ctx ctx :state state :trace trace})
@@ -76,7 +76,8 @@
                            e))))]
          (if next-state
            (recur ctx next-state trace)
-           state-output))))))
+           (merge state-output
+                  (into {} (remove (fn [[k _]] (.startsWith (name k) "_"))) fx-output))))))))
 
 (defmacro defmachine
   "Defines a machine as a var. Machine name keyword is derived from
@@ -89,6 +90,46 @@
   [sym & args]
   (let [machine-name (keyword (str *ns*) (str sym))]
     `(def ~sym (machine ~machine-name ~@args))))
+
+;; === Resolver ===
+
+(defmacro defresolver
+  "Defines a biff.graph resolver backed by an fx machine.
+
+   Usage:
+     (defresolver my-resolver
+       {:input [:foo]
+        :output [:bar :baz]}
+       [ctx input]
+       {:bar [:biff.fx/sqlite {:select [:*] :from [:bar]}]
+        :biff.fx/next :next-state}
+
+       :next-state
+       (fn [{:keys [bar]}]
+         {:baz (count bar)}))
+
+   The first form after the parameter vector is the main resolver body.
+   Remaining keyword/fn pairs (if any) define additional machine states.
+   The var gets :input and :output metadata so biff.graph can use it.
+   The resolver function runs inside an fx machine so effects like
+   :biff.fx/sqlite are available."
+  {:arglists '([sym opts-map [ctx input] body & states])}
+  [sym opts & args]
+  (let [{:keys [input output]} opts
+        [params body & state-kvs] args
+        machine-name (keyword (str *ns*) (str sym))
+        ctx-sym (first params)
+        input-sym (second params)]
+    `(let [start-fn# (fn [~ctx-sym ~input-sym] ~body)
+           m# (machine ~machine-name
+                 :start (fn [{resolver-input# :biff.fx/resolver-input :as ctx#}]
+                          (start-fn# ctx# resolver-input#))
+                 ~@state-kvs)]
+       (defn ~sym
+         ~(merge (when (seq input) {:input input})
+                 {:output output})
+         [ctx# input#]
+         (m# (assoc ctx# :biff.fx/resolver-input input#))))))
 
 ;; === Routing ===
 
