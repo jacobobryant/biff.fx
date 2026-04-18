@@ -76,8 +76,11 @@
                            e))))]
          (if next-state
            (recur ctx next-state trace)
-           (merge state-output
-                  (into {} (remove (fn [[k _]] (.startsWith (name k) "_"))) fx-output))))))))
+           (let [result (merge state-output
+                               (into {} (remove (fn [[k _]] (.startsWith (name k) "_"))) fx-output))]
+             (if (contains? result :biff.fx/return)
+               (:biff.fx/return result)
+               result))))))))
 
 (defmacro defmachine
   "Defines a machine as a var. Machine name keyword is derived from
