@@ -321,3 +321,38 @@
     (is (= {:result "used-loaded"}
            (m {:biff.fx/handlers
                {:biff.fx/load (fn [_ _] "loaded")}})))))
+
+;; === :biff.fx/return ===
+
+(deftest machine-return-key-returns-value
+  (let [m (fx/machine ::return-test
+            :start (fn [_] {:biff.fx/return 42 :other "ignored"}))]
+    (is (= 42 (m {:biff.fx/handlers {}})))))
+
+(deftest machine-return-key-with-nil-value
+  (let [m (fx/machine ::return-nil
+            :start (fn [_] {:biff.fx/return nil}))]
+    (is (nil? (m {:biff.fx/handlers {}})))))
+
+(deftest machine-return-key-with-effect
+  (testing "biff.fx/return works with effects - returns the effect result"
+    (let [m (fx/machine ::return-fx
+              :start (fn [_] {:biff.fx/return [:biff.fx/http {:url "test"}]}))]
+      (is (= {:status 200 :body "ok"}
+             (m {:biff.fx/handlers
+                 {:biff.fx/http (fn [_ req] {:status 200 :body "ok"})}}))))))
+
+(deftest machine-return-key-multi-state
+  (testing "biff.fx/return in final state works"
+    (let [m (fx/machine ::return-multi
+              :start (fn [_] {:data [:biff.fx/load "x"] :biff.fx/next :finish})
+              :finish (fn [{:keys [data]}] {:biff.fx/return (str "result: " data)}))]
+      (is (= "result: loaded"
+             (m {:biff.fx/handlers
+                 {:biff.fx/load (fn [_ _] "loaded")}}))))))
+
+(deftest machine-without-return-key-unchanged
+  (testing "Without :biff.fx/return, behavior is unchanged"
+    (let [m (fx/machine ::no-return
+              :start (fn [_] {:a 1 :b 2}))]
+      (is (= {:a 1 :b 2} (m {:biff.fx/handlers {}}))))))
