@@ -54,7 +54,10 @@
        (.toFile dir)))})
 
 (defn step [{:keys [state->transition-fn ctx state trace]}]
-  (let [handlers (merge default-handlers (:biff.fx/handlers ctx))
+  (let [handlers (merge default-handlers
+                        (when-some [get-handlers (:biff.fx/get-handlers ctx)]
+                          (get-handlers))
+                        (:biff.fx/handlers ctx))
         last-results (->> (some-> trace peek :biff.fx/results)
                           (mapv :biff.fx/fx-output)
                           (filterv not-empty))

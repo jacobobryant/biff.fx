@@ -26,6 +26,15 @@
            (m {:biff.fx/handlers
                {:biff.fx/double (fn [_ n] (* 2 n))}})))))
 
+(deftest machine-uses-get-handlers
+  (let [m (fx/machine ::get-handlers
+            :start (fn [_] {:doubled [:biff.fx/double 5] :biff.fx/next :use-result})
+            :use-result (fn [ctx] {:result (:doubled ctx)}))]
+    (is (= {:result 10}
+           (m {:biff.fx/get-handlers
+               (fn []
+                 {:biff.fx/double (fn [_ n] (* 2 n))})})))))
+
 (deftest machine-two-arity-runs-single-state
   (let [m (fx/machine ::two-arity
             :start (fn [_] {:db-result [:biff.fx/db :q] :biff.fx/next :second})
