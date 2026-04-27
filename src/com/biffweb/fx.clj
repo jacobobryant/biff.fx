@@ -7,18 +7,21 @@
 
    A machine is created with named state transition functions. Each
    function receives the context map and returns a map where:
-     - Values that are vectors whose first element is a key in the fx
-       handlers map → that effect is executed, and the result is stored
-       under the map entry's key in the context
+     - Values that are vectors whose first element is an implemented
+       `handle` dispatch key (or a key present in `:biff.fx/overrides`)
+       → that effect is executed, and the result is stored under the map
+       entry's key in the context
      - :biff.fx/next → the next state to transition to
      - Other keys → merged into context for subsequent states
 
-   Effect handlers are provided in the context under :biff.fx/handlers.
+   Effect handlers are defined with the `handle` multimethod. Tests may
+   override handlers via `:biff.fx/overrides` in the context.
    :biff/now is injected as a java.time.Instant before each state runs.
    :biff.fx/seed is injected as a random long seed.
    :biff.fx/results is set from the last trace entry."
   (:require [com.biffweb.fx.impl :as impl])
-  (:import [java.util Random UUID]))
+  (:import [java.security SecureRandom]
+           [java.util Random UUID]))
 
 ;; === Seed-based deterministic randomness ===
 
@@ -37,6 +40,58 @@
         bs (byte-array n)]
     (.nextBytes rng bs)
     [bs (.nextLong rng)]))
+
+;; === Effect dispatch ===
+
+(defmulti handle
+  "Executes an effect for `fx-key`.
+
+   Libraries can provide effect implementations with:
+
+     (defmethod handle :some.lib.fx/do-thing
+       [_fx-key ctx & args]
+       ...)"
+  (fn [fx-key _ctx & _args] fx-key))
+
+(defmethod handle :biff.fx/http
+  [_fx-key _ctx request-or-requests]
+  (let [hato-request (requiring-resolve 'hato.client/request)
+        http* (fn [request]
+                (try
+                  (-> (hato-request request)
+                      (assoc :url (:url request))
+                      (dissoc :http-client))
+                  (catch Exception e
+                    (if (get request :throw-exceptions true)
+                      (throw e)
+                      {:url (:url request)
+                       :exception e}))))]
+    (if (map? request-or-requests)
+      (http* request-or-requests)
+      (mapv http* request-or-requests))))
+
+(defmethod handle :biff.fx/slurp
+  [_fx-key _ctx & args]
+  (apply slurp args))
+
+(defmethod handle :biff.fx/spit
+  [_fx-key _ctx & args]
+  (apply spit args))
+
+(defmethod handle :biff.fx/sleep
+  [_fx-key _ctx sleep-ms]
+  (Thread/sleep (long sleep-ms)))
+
+(defmethod handle :biff.fx/temp-dir
+  [_fx-key _ctx & {:keys [prefix]}]
+  (let [dir (java.nio.file.Files/createTempDirectory
+             (or prefix "biff")
+             (into-array java.nio.file.attribute.FileAttribute []))]
+    (.toFile dir)))
+
+(defmethod handle :biff.fx/secure-random-int
+  [_fx-key _ctx n]
+  (.nextInt (SecureRandom.) n))
 
 ;; === Core state machine ===
 
@@ -90,89 +145,6 @@
      (defmachine my-handler
        :start (fn [ctx] ...)
        :next-state (fn [ctx] ...))"
-  [sym & args]
-  (let [machine-name (keyword (str *ns*) (str sym))]
-    `(def ~sym (machine ~machine-name ~@args))))
-
-;; === Resolver ===
-
-(defmacro defresolver
-  "Defines a biff.graph resolver backed by an fx machine.
-
-   Usage:
-     (defresolver my-resolver
-       {:input [:foo]
-        :output [:bar :baz]}
-       [ctx input]
-       {:bar [:biff.fx/sqlite {:select [:*] :from [:bar]}]
-        :biff.fx/next :next-state}
-
-       :next-state
-       (fn [{:keys [bar]}]
-         {:baz (count bar)}))
-
-   The first form after the parameter vector is the main resolver body.
-   Remaining keyword/fn pairs (if any) define additional machine states.
-   The var gets :input and :output metadata so biff.graph can use it.
-   The resolver function runs inside an fx machine so effects like
-   :biff.fx/sqlite are available."
-  {:arglists '([sym opts-map [ctx input] body & states])}
-  [sym opts & args]
-  (let [{:keys [input output]} opts
-        [params body & state-kvs] args
-        machine-name (keyword (str *ns*) (str sym))
-        ctx-sym (first params)
-        input-sym (second params)]
-    `(let [start-fn# (fn [~ctx-sym ~input-sym] ~body)
-           m# (machine ~machine-name
-                 :start (fn [{resolver-input# :biff.fx/resolver-input :as ctx#}]
-                          (start-fn# ctx# resolver-input#))
-                 ~@state-kvs)]
-       (defn ~sym
-         ~(merge (when (seq input) {:input input})
-                 {:output output})
-         [ctx# input#]
-         (m# (assoc ctx# :biff.fx/resolver-input input#))))))
-
-;; === Routing ===
-
-(defmacro defroute
-  "Defines a route var with auto-generated or explicit URI.
-
-   Usage:
-     (defroute my-route \"/path\"
-       :get (fn [ctx] ...)
-       :post (fn [ctx] ...))
-
-     (defroute my-route  ; URI auto-generated from namespace and symbol
-       :get (fn [ctx] ...))
-
-     (defroute my-route \"/path\"
-       [:biff.fx/pathom [{:session/user [:user/email]}]]
-       :get (fn [ctx {:keys [session/user]}] ...))"
-  [sym & args]
-  (let [[uri & rest-args] (if (string? (first args))
-                            args
-                            (into [nil] args))
-        uri (or uri (impl/autogen-endpoint *ns* sym))
-        [initial-fx & kvs] (if (vector? (first rest-args))
-                             rest-args
-                             (into [nil] rest-args))
-        route-name (keyword (str *ns*) (str sym))
-        initial-fx-sym (gensym "initial-fx")
-        params-sym (gensym "params")]
-    `(def ~sym
-       (let [~initial-fx-sym ~initial-fx
-             [& {:as ~params-sym}] [~@kvs]]
-         (impl/route* ~uri
-                      ~route-name
-                      machine
-                      (-> ~params-sym
-                          (update-vals impl/wrap-hiccup)
-                          ~@(when initial-fx
-                              [`(impl/wrap-methods impl/wrap-result)])
-                          (merge {:start (fn [{:keys [~'request-method]}]
-                                          ~(if initial-fx
-                                             `{:biff.fx/result ~initial-fx-sym
-                                               :biff.fx/next ~'request-method}
-                                             `{:biff.fx/next ~'request-method}))})))))))
+   [sym & args]
+   (let [machine-name (keyword (str *ns*) (str sym))]
+     `(def ~sym (machine ~machine-name ~@args))))

@@ -39,64 +39,60 @@ functions receive a context map and return a map describing what to do next:
 Call it like a function:
 
 ```clojure
-(my-handler {:biff.fx/handlers {:biff.fx/db (fn [ctx query] ...)}})
+(my-handler {})
 ```
 
 ### Effects
 
 Effects are identified by **value**, not by key. If a map entry's value is a
-vector whose first element matches a key in `:biff.fx/handlers`, it's treated
-as an effect:
+vector whose first element matches an implemented `com.biffweb.fx/handle`
+dispatch value (or a key in `:biff.fx/overrides`), it's treated as an effect:
 
 ```clojure
-;; This entry is an effect — the value is a vector starting with a handler key
+;; This entry is an effect — the value is a vector starting with a handle key
 {:my-result [:biff.fx/http {:method :get :url "https://example.com"}]}
 
 ;; This entry is NOT an effect — the value is a plain keyword
 {:biff.fx/next :some-state}
 
-;; This is NOT an effect — :not-a-handler isn't in the handlers map
-{:data [:not-a-handler 1 2 3]}
+;; This is NOT an effect — :not-an-effect isn't handled
+{:data [:not-an-effect 1 2 3]}
 ```
 
-The effect handler receives `ctx` as the first argument, followed by the
-remaining elements of the vector:
+Effect implementations are defined with a multimethod:
 
 ```clojure
-;; For {:my-result [:biff.fx/http {:method :get}]}
-;; the handler is called as: (http-handler ctx {:method :get})
+(require '[com.biffweb.fx :as fx])
 
-;; For {:sum [:biff.fx/add 1 2 3]}
-;; the handler is called as: (add-handler ctx 1 2 3)
+(defmethod fx/handle :my.app.fx/add
+  [_fx-key ctx & nums]
+  (apply + nums))
 ```
 
 The effect's return value is stored under the map entry's key (e.g.
 `:my-result`) in the context, available to subsequent states.
 
-### Routes
-
-`defroute` creates HTTP route handlers backed by machines:
-
-```clojure
-(fx/defroute my-page "/my-page"
-  :get (fn [ctx] [:div "Hello world"]))
-```
-
-Hiccup vectors (vectors starting with a keyword) are automatically wrapped in
-`{:body ...}`.
-
-You can optionally provide an initial effect vector that runs before the HTTP
-method handler:
+For tests, you can override effect implementations without redefining the
+multimethod:
 
 ```clojure
-(fx/defroute my-page "/my-page"
-  [:biff.fx/pathom [{:session/user [:user/email]}]]
-  :get (fn [ctx {:keys [session/user]}]
-    [:div "Hello, " (:user/email user)]))
+(my-handler
+  {:biff.fx/overrides
+   {:my.app.fx/add (fn [_ctx & nums] 999)}})
 ```
 
-If the URI is omitted, one is auto-generated from the namespace and symbol
-name.
+### Naming convention
+
+When you define effect keywords for library functions, start with the namespace
+alias you would normally use for the function, append `.fx`, and then use the
+function name. Examples:
+
+```clojure
+com.biffweb.graph/query      => :biff.graph.fx/query
+com.biffweb.sqlite/execute   => :biff.sqlite.fx/execute
+com.biffweb.sqlite/authorized-write
+                             => :biff.sqlite.fx/authorized-write
+```
 
 ### Deterministic randomness
 
@@ -129,16 +125,14 @@ The returned function has two arities:
 Macro. Defines a machine as a var. Machine name is derived from the namespace
 and symbol.
 
-### `defroute [sym & args]`
-Macro. Defines an HTTP route backed by a machine. Accepts an optional URI
-string, an optional initial effect vector, and keyword/function pairs for HTTP
-methods.
+### `handle [fx-key ctx & args]`
+Multimethod. Define one method per effect keyword.
 
 ## Context keys
 
 | Key | Description |
 |-----|-------------|
-| `:biff.fx/handlers` | Map of effect handler keyword → function |
+| `:biff.fx/overrides` | Map of effect keyword → function for tests/temporary overrides |
 | `:biff.fx/next` | Next state keyword (in state return map) |
 | `:biff/now` | Injected `java.time.Instant` before each state |
 | `:biff.fx/seed` | Injected random long seed |
