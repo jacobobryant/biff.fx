@@ -16,7 +16,7 @@
 
    Effect handlers are defined with the `handle` multimethod. Tests may
    override handlers via `:biff.fx/overrides` in the context.
-   :biff/now is injected as a java.time.Instant before each state runs.
+   :biff.fx/now is injected as a java.time.Instant before each state runs.
    :biff.fx/seed is injected as a random long seed.
    :biff.fx/results is set from the last trace entry."
   (:require [com.biffweb.fx.impl :as impl])

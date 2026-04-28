@@ -32,9 +32,9 @@
             :second (fn [{:keys [x]}] {:result (* x 2)}))]
     (is (= {:result 10} (m {:x 5} :second)))))
 
-(deftest machine-injects-biff-now
+(deftest machine-injects-biff-fx-now
   (let [m (fx/machine ::now-test
-            :start (fn [ctx] {:now-class (class (:biff/now ctx))}))]
+            :start (fn [ctx] {:now-class (class (:biff.fx/now ctx))}))]
     (is (= java.time.Instant
            (:now-class (m {}))))))
 
