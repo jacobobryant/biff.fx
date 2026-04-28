@@ -21,7 +21,7 @@
                           (mapv :biff.fx/fx-output)
                           (filterv not-empty))
         ctx (assoc ctx
-                   :biff/now (Instant/now)
+                   :biff.fx/now (Instant/now)
                    :biff.fx/seed (.nextLong (Random.))
                    :biff.fx/results last-results)
         t-fn (or (get state->transition-fn state)

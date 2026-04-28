@@ -134,7 +134,7 @@ Multimethod. Define one method per effect keyword.
 |-----|-------------|
 | `:biff.fx/overrides` | Map of effect keyword → function for tests/temporary overrides |
 | `:biff.fx/next` | Next state keyword (in state return map) |
-| `:biff/now` | Injected `java.time.Instant` before each state |
+| `:biff.fx/now` | Injected `java.time.Instant` before each state |
 | `:biff.fx/seed` | Injected random long seed |
 | `:biff.fx/results` | Previous state's effect output maps |
 | `:biff.fx/trace` | Accumulated trace of all state transitions |
