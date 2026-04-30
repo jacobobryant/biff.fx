@@ -13,10 +13,14 @@
    data))
 
 (defn step [{:keys [state->transition-fn ctx state trace]}]
-  (let [handle-var (requiring-resolve 'com.biffweb.fx/handle)
-        handle-fn @handle-var
+  (let [fx-handlers-var (requiring-resolve 'com.biffweb.fx/fx-handlers)
+        handlers (merge @fx-handlers-var
+                        (when-some [get-handlers (:biff.fx/get-handlers ctx)]
+                          (get-handlers))
+                        (:biff.fx/handlers ctx))
         overrides (:biff.fx/overrides ctx)
-        handled-fx-keys (set (keys (methods handle-fn)))
+        handled-fx-keys (into (set (keys handlers))
+                              (keys overrides))
         last-results (->> (some-> trace peek :biff.fx/results)
                           (mapv :biff.fx/fx-output)
                           (filterv not-empty))
@@ -45,14 +49,13 @@
                                 (map (fn [[k v]]
                                        (let [handler-key (first v)
                                              handler-args (rest v)
-                                             override (get overrides handler-key)]
-                                         [k (try
-                                              (if override
-                                                (apply override ctx handler-args)
-                                                (apply handle-fn handler-key ctx handler-args))
-                                              (catch Exception e
-                                                (throw
-                                                 (ex-info
+                                              handler-fn (or (get overrides handler-key)
+                                                             (get handlers handler-key))]
+                                          [k (try
+                                               (apply handler-fn ctx handler-args)
+                                               (catch Exception e
+                                                 (throw
+                                                  (ex-info
                                                  "Exception while running biff.fx effect"
                                                  (truncate {:effect handler-key
                                                             :key k

@@ -184,23 +184,30 @@
     (is (= {:ctx-keys [:biff.fx/result] :result {:user "data"}}
            (f {:biff.fx/result {:user "data"}})))))
 
-(defmethod fx/handle ::custom-double
-  [_fx-key _ctx n]
-  (* 2 n))
+(deftest machine-uses-context-handlers
+  (let [m (fx/machine ::context-handlers
+             :start (fn [_] {:result [::custom-double 5] :biff.fx/next :done})
+             :done (fn [{:keys [result]}] {:result result}))]
+     (is (= {:result 10}
+           (m {:biff.fx/handlers
+               {::custom-double (fn [_ctx n] (* 2 n))}})))))
 
-(deftest machine-uses-custom-handle-method
-  (let [m (fx/machine ::custom-handle
+(deftest machine-uses-get-handlers
+  (let [m (fx/machine ::get-handlers
             :start (fn [_] {:result [::custom-double 5] :biff.fx/next :done})
             :done (fn [{:keys [result]}] {:result result}))]
     (is (= {:result 10}
-           (m {})))))
+           (m {:biff.fx/get-handlers
+               (fn []
+                 {::custom-double (fn [_ctx n] (* 2 n))})})))))
 
-(deftest overrides-take-precedence-over-handle-method
+(deftest overrides-take-precedence-over-context-handlers
   (let [m (fx/machine ::override-test
-            :start (fn [_] {:result [:biff.fx/sleep 0] :biff.fx/next :done})
+            :start (fn [_] {:result [::custom-double 5] :biff.fx/next :done})
             :done (fn [{:keys [result]}] {:result result}))]
     (is (= {:result :custom}
-           (m {:biff.fx/overrides {:biff.fx/sleep (fn [_ _] :custom)}})))))
+           (m {:biff.fx/handlers {::custom-double (fn [_ctx n] (* 2 n))}
+               :biff.fx/overrides {::custom-double (fn [_ctx _n] :custom)}})))))
 
 (deftest machine-filters-underscore-keys-from-fx-output
   (let [m (fx/machine ::underscore-test

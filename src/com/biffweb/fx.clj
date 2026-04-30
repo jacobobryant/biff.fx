@@ -7,15 +7,16 @@
 
    A machine is created with named state transition functions. Each
    function receives the context map and returns a map where:
-     - Values that are vectors whose first element is an implemented
-       `handle` dispatch key (or a key present in `:biff.fx/overrides`)
-       → that effect is executed, and the result is stored under the map
-       entry's key in the context
+     - Values that are vectors whose first element is a key in
+       `:biff.fx/handlers` (or `:biff.fx/overrides`) → that effect is
+       executed, and the result is stored under the map entry's key in the
+       context
      - :biff.fx/next → the next state to transition to
      - Other keys → merged into context for subsequent states
 
-   Effect handlers are defined with the `handle` multimethod. Tests may
-   override handlers via `:biff.fx/overrides` in the context.
+   Built-in effect handlers are exposed via `fx-handlers`. Applications and
+   libraries can extend them by merging more handlers into
+   `:biff.fx/handlers`. Tests may override handlers via `:biff.fx/overrides`.
    :biff.fx/now is injected as a java.time.Instant before each state runs.
    :biff.fx/seed is injected as a random long seed.
    :biff.fx/results is set from the last trace entry."
@@ -43,55 +44,46 @@
 
 ;; === Effect dispatch ===
 
-(defmulti handle
-  "Executes an effect for `fx-key`.
+(def fx-handlers
+  {:biff.fx/http
+   (fn [_ctx request-or-requests]
+     (let [hato-request (requiring-resolve 'hato.client/request)
+           http* (fn [request]
+                   (try
+                     (-> (hato-request request)
+                         (assoc :url (:url request))
+                         (dissoc :http-client))
+                     (catch Exception e
+                       (if (get request :throw-exceptions true)
+                         (throw e)
+                         {:url (:url request)
+                          :exception e}))))]
+       (if (map? request-or-requests)
+         (http* request-or-requests)
+         (mapv http* request-or-requests))))
 
-   Libraries can provide effect implementations with:
+   :biff.fx/slurp
+   (fn [_ctx & args]
+     (apply slurp args))
 
-     (defmethod handle :some.lib.fx/do-thing
-       [_fx-key ctx & args]
-       ...)"
-  (fn [fx-key _ctx & _args] fx-key))
+   :biff.fx/spit
+   (fn [_ctx & args]
+     (apply spit args))
 
-(defmethod handle :biff.fx/http
-  [_fx-key _ctx request-or-requests]
-  (let [hato-request (requiring-resolve 'hato.client/request)
-        http* (fn [request]
-                (try
-                  (-> (hato-request request)
-                      (assoc :url (:url request))
-                      (dissoc :http-client))
-                  (catch Exception e
-                    (if (get request :throw-exceptions true)
-                      (throw e)
-                      {:url (:url request)
-                       :exception e}))))]
-    (if (map? request-or-requests)
-      (http* request-or-requests)
-      (mapv http* request-or-requests))))
+   :biff.fx/sleep
+   (fn [_ctx sleep-ms]
+     (Thread/sleep (long sleep-ms)))
 
-(defmethod handle :biff.fx/slurp
-  [_fx-key _ctx & args]
-  (apply slurp args))
+   :biff.fx/temp-dir
+   (fn [_ctx & {:keys [prefix]}]
+     (let [dir (java.nio.file.Files/createTempDirectory
+                (or prefix "biff")
+                (into-array java.nio.file.attribute.FileAttribute []))]
+       (.toFile dir)))
 
-(defmethod handle :biff.fx/spit
-  [_fx-key _ctx & args]
-  (apply spit args))
-
-(defmethod handle :biff.fx/sleep
-  [_fx-key _ctx sleep-ms]
-  (Thread/sleep (long sleep-ms)))
-
-(defmethod handle :biff.fx/temp-dir
-  [_fx-key _ctx & {:keys [prefix]}]
-  (let [dir (java.nio.file.Files/createTempDirectory
-             (or prefix "biff")
-             (into-array java.nio.file.attribute.FileAttribute []))]
-    (.toFile dir)))
-
-(defmethod handle :biff.fx/secure-random-int
-  [_fx-key _ctx n]
-  (.nextInt (SecureRandom.) n))
+   :biff.fx/secure-random-int
+   (fn [_ctx n]
+     (.nextInt (SecureRandom.) n))})
 
 ;; === Core state machine ===
 
