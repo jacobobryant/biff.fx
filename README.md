@@ -45,8 +45,8 @@ Call it like a function:
 ### Effects
 
 Effects are identified by **value**, not by key. If a map entry's value is a
-vector whose first element matches a key in `:biff.fx/handlers` (or a key in
-`:biff.fx/overrides`), it's treated as an effect:
+vector whose first element matches a key in `:biff.fx/handlers`, it's treated
+as an effect:
 
 ```clojure
 ;; This entry is an effect — the value is a vector starting with a handle key
@@ -60,11 +60,10 @@ vector whose first element matches a key in `:biff.fx/handlers` (or a key in
 ```
 
 Libraries add effect implementations by merging handler fns into
-`:biff.fx/handlers`, usually from a public `fx-handlers` var:
+`:biff.fx/handlers`, often from a public `fx-handlers` var in the library that
+owns those handlers:
 
 ```clojure
-(require '[com.biffweb.fx :as fx])
-
 (def fx-handlers
   {:my.app.fx/add
    (fn [ctx & nums]
@@ -74,13 +73,16 @@ Libraries add effect implementations by merging handler fns into
 The effect's return value is stored under the map entry's key (e.g.
 `:my-result`) in the context, available to subsequent states.
 
-For tests, you can override effect implementations without redefining the
-handler map:
+If the handler set needs to be computed dynamically, pass a function under
+`:biff.fx/get-handlers`. It takes precedence over `:biff.fx/handlers`:
 
 ```clojure
 (my-handler
-  {:biff.fx/overrides
-   {:my.app.fx/add (fn [_ctx & nums] 999)}})
+  {:biff.fx/handlers
+   {:my.app.fx/add (fn [_ctx & nums] (apply + nums))}
+   :biff.fx/get-handlers
+   (fn []
+     {:my.app.fx/add (fn [_ctx & nums] 999)})})
 ```
 
 ### Naming convention
@@ -127,15 +129,12 @@ The returned function has two arities:
 Macro. Defines a machine as a var. Machine name is derived from the namespace
 and symbol.
 
-### `fx-handlers`
-Map of the built-in effect handlers provided by `biff.fx`.
-
 ## Context keys
 
 | Key | Description |
 |-----|-------------|
 | `:biff.fx/handlers` | Map of effect keyword → function |
-| `:biff.fx/overrides` | Map of effect keyword → function for tests/temporary overrides |
+| `:biff.fx/get-handlers` | Function that returns effect handlers for this machine run |
 | `:biff.fx/next` | Next state keyword (in state return map) |
 | `:biff.fx/now` | Injected `java.time.Instant` before each state |
 | `:biff.fx/seed` | Injected random long seed |

@@ -1,7 +1,8 @@
 (ns com.biffweb.fx.impl
   "Implementation details for com.biffweb.fx. Do not use directly."
   (:require [clojure.walk :as walk])
-  (:import [java.time Instant]
+  (:import [java.security SecureRandom]
+           [java.time Instant]
            [java.util Random]))
 
 (defn truncate-str [s n]
@@ -12,15 +13,49 @@
    (fn [data] (if (string? data) (truncate-str data 500) data))
    data))
 
-(defn step [{:keys [state->transition-fn ctx state trace]}]
-  (let [fx-handlers-var (requiring-resolve 'com.biffweb.fx/fx-handlers)
-        handlers (merge @fx-handlers-var
-                        (when-some [get-handlers (:biff.fx/get-handlers ctx)]
-                          (get-handlers))
-                        (:biff.fx/handlers ctx))
-        overrides (:biff.fx/overrides ctx)
-        handled-fx-keys (into (set (keys handlers))
-                              (keys overrides))
+(def default-fx-handlers
+  {:biff.fx/http
+   (fn [_ctx request-or-requests]
+     (let [hato-request (requiring-resolve 'hato.client/request)
+           http* (fn [request]
+                   (try
+                     (-> (hato-request request)
+                         (assoc :url (:url request))
+                         (dissoc :http-client))
+                     (catch Exception e
+                       (if (get request :throw-exceptions true)
+                         (throw e)
+                         {:url (:url request)
+                          :exception e}))))]
+       (if (map? request-or-requests)
+         (http* request-or-requests)
+         (mapv http* request-or-requests))))
+
+   :biff.fx/slurp
+   (fn [_ctx & args]
+     (apply slurp args))
+
+   :biff.fx/spit
+   (fn [_ctx & args]
+     (apply spit args))
+
+   :biff.fx/sleep
+   (fn [_ctx sleep-ms]
+     (Thread/sleep (long sleep-ms)))
+
+   :biff.fx/temp-dir
+   (fn [_ctx & {:keys [prefix]}]
+     (let [dir (java.nio.file.Files/createTempDirectory
+                (or prefix "biff")
+                (into-array java.nio.file.attribute.FileAttribute []))]
+       (.toFile dir)))
+
+   :biff.fx/secure-random-int
+   (fn [_ctx n]
+     (.nextInt (SecureRandom.) n))})
+
+(defn step [{:keys [state->transition-fn ctx state trace handlers]}]
+  (let [handled-fx-keys (set (keys handlers))
         last-results (->> (some-> trace peek :biff.fx/results)
                           (mapv :biff.fx/fx-output)
                           (filterv not-empty))
@@ -33,29 +68,27 @@
         result (t-fn ctx)
         results (if (map? result) [result] result)
          results (mapv
-                  (fn [m]
-                    (let [effect-entry? (fn [[_ v]]
-                                          (and (vector? v)
-                                               (seq v)
-                                               (keyword? (first v))
-                                               (or (contains? overrides (first v))
-                                                   (contains? handled-fx-keys (first v)))))
-                          effect-keys (set (map key (filter effect-entry? m)))
-                          state-output (apply dissoc m effect-keys)
-                          fx-input (select-keys m effect-keys)
-                         ctx (merge ctx state-output)
-                         fx-output
+                   (fn [m]
+                     (let [effect-entry? (fn [[_ v]]
+                                           (and (vector? v)
+                                                (seq v)
+                                                (keyword? (first v))
+                                                (contains? handled-fx-keys (first v))))
+                           effect-keys (set (map key (filter effect-entry? m)))
+                           state-output (apply dissoc m effect-keys)
+                           fx-input (select-keys m effect-keys)
+                          ctx (merge ctx state-output)
+                          fx-output
                          (into {}
-                                (map (fn [[k v]]
-                                       (let [handler-key (first v)
-                                             handler-args (rest v)
-                                              handler-fn (or (get overrides handler-key)
-                                                             (get handlers handler-key))]
-                                          [k (try
-                                               (apply handler-fn ctx handler-args)
-                                               (catch Exception e
-                                                 (throw
-                                                  (ex-info
+                                 (map (fn [[k v]]
+                                        (let [handler-key (first v)
+                                              handler-args (rest v)
+                                              handler-fn (get handlers handler-key)]
+                                           [k (try
+                                                (apply handler-fn ctx handler-args)
+                                                (catch Exception e
+                                                  (throw
+                                                   (ex-info
                                                  "Exception while running biff.fx effect"
                                                  (truncate {:effect handler-key
                                                             :key k
