@@ -85,6 +85,10 @@ If the handler set needs to be computed dynamically, pass a function under
      {:my.app.fx/add (fn [_ctx & nums] 999)})})
 ```
 
+If you're composing Biff modules, include `(fx/module)` in your module list.
+It memoizes a `:biff.fx/get-handlers` function that merges each module's
+top-level `:biff.fx/handlers` map.
+
 ### Naming convention
 
 When you define effect keywords for library functions, start with the namespace
@@ -128,6 +132,10 @@ The returned function has two arities:
 ### `defmachine [sym & state-kvs]`
 Macro. Defines a machine as a var. Machine name is derived from the namespace
 and symbol.
+
+### `module []`
+Returns a Biff module that memoizes a merged `:biff.fx/get-handlers` function
+from the active modules' top-level `:biff.fx/handlers` maps.
 
 ## Context keys
 

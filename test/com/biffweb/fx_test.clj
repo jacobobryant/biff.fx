@@ -139,6 +139,24 @@
         [_ s2] (fx/random-bytes s1 16)]
     (is (not= s1 s2))))
 
+;; === Module ===
+
+(deftest module-aggregates-fx-handlers
+  (let [modules-var (atom [{:biff.fx/handlers {::double (fn [_ctx n] (* 2 n))}}
+                           {:biff.fx/handlers {::triple (fn [_ctx n] (* 3 n))}}])
+        get-handlers (:biff.fx/get-handlers
+                      ((:biff.core/init (fx/module))
+                       modules-var))
+        handlers-1 (get-handlers)
+        handlers-2 (get-handlers)]
+    (is (identical? handlers-1 handlers-2))
+    (is (= 10 ((get handlers-1 ::double) {} 5)))
+    (is (= 15 ((get handlers-1 ::triple) {} 5)))
+    (swap! modules-var conj {:biff.fx/handlers {::quadruple (fn [_ctx n] (* 4 n))}})
+    (let [handlers-3 (get-handlers)]
+      (is (not (identical? handlers-1 handlers-3)))
+      (is (= 20 ((get handlers-3 ::quadruple) {} 5))))))
+
 ;; === defmachine macro ===
 
 (fx/defmachine test-machine

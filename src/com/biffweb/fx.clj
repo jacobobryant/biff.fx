@@ -41,6 +41,21 @@
     (.nextBytes rng bs)
     [bs (.nextLong rng)]))
 
+(def ^:private handlers-for-modules
+  (memoize
+   (fn [modules]
+     (->> modules
+          (keep :biff.fx/handlers)
+          (apply merge {})))))
+
+(defn module
+  []
+  {:biff.core/init
+   (fn [modules-var]
+     {:biff.fx/get-handlers
+      (fn []
+        (handlers-for-modules @modules-var))})})
+
 ;; === Core state machine ===
 
 (defn machine
@@ -96,10 +111,10 @@
   "Defines a machine as a var. Machine name keyword is derived from
    the current namespace and the var symbol.
 
-   Usage:
-     (defmachine my-handler
-       :start (fn [ctx] ...)
-       :next-state (fn [ctx] ...))"
-   [sym & args]
-   (let [machine-name (keyword (str *ns*) (str sym))]
-     `(def ~sym (machine ~machine-name ~@args))))
+    Usage:
+      (defmachine my-handler
+        :start (fn [ctx] ...)
+        :next-state (fn [ctx] ...))"
+  [sym & args]
+  (let [machine-name (keyword (str *ns*) (str sym))]
+    `(def ~sym (machine ~machine-name ~@args))))
