@@ -15,7 +15,7 @@
             :start (fn [_] {:db-result [:biff.fx/db :load] :biff.fx/next :second})
             :second (fn [{:keys [db-result]}] {:result db-result}))]
     (is (= {:result :loaded}
-           (m {:biff.fx/overrides
+           (m {:biff.fx/handlers
                {:biff.fx/db (fn [_ _] :loaded)}})))))
 
 (deftest machine-runs-effects-and-stores-results
@@ -23,7 +23,7 @@
             :start (fn [_] {:doubled [:biff.fx/double 5] :biff.fx/next :use-result})
             :use-result (fn [ctx] {:result (:doubled ctx)}))]
     (is (= {:result 10}
-           (m {:biff.fx/overrides
+           (m {:biff.fx/handlers
                {:biff.fx/double (fn [_ n] (* 2 n))}})))))
 
 (deftest machine-two-arity-runs-single-state
@@ -48,7 +48,7 @@
             :start (fn [_] {:db-result [:biff.fx/db :q] :biff.fx/next :check})
             :check (fn [ctx] {:has-results (some? (:biff.fx/results ctx))}))]
     (is (true? (:has-results
-                (m {:biff.fx/overrides
+                (m {:biff.fx/handlers
                     {:biff.fx/db (fn [_ _] :ok)}}))))))
 
 (deftest machine-allows-effectless-transition
@@ -74,7 +74,7 @@
   (let [m (fx/machine ::fx-err
             :start (fn [_] {:boom-result [:biff.fx/boom "input"]}))]
     (is (thrown-with-msg? Exception #"Exception while running biff.fx"
-          (m {:biff.fx/overrides
+          (m {:biff.fx/handlers
               {:biff.fx/boom (fn [_ _] (throw (Exception. "boom")))}})))))
 
 (deftest machine-multiple-effects-in-one-state
@@ -82,7 +82,7 @@
             :start (fn [_] {:a-result [:biff.fx/a 1] :b-result [:biff.fx/b 2] :biff.fx/next :check})
             :check (fn [ctx] {:a (:a-result ctx) :b (:b-result ctx)}))]
     (is (= {:a 10 :b 20}
-           (m {:biff.fx/overrides
+           (m {:biff.fx/handlers
                {:biff.fx/a (fn [_ n] (* 10 n))
                 :biff.fx/b (fn [_ n] (* 10 n))}})))))
 
@@ -92,7 +92,7 @@
             :check (fn [ctx]
                      {:results (:biff.fx/results ctx)}))]
     (is (= {:results [{:db-result :result-val}]}
-           (m {:biff.fx/overrides
+           (m {:biff.fx/handlers
                {:biff.fx/db (fn [_ _] :result-val)}})))))
 
 (deftest machine-effect-with-multiple-args
@@ -100,7 +100,7 @@
             :start (fn [_] {:sum-result [:biff.fx/add 1 2 3] :biff.fx/next :check})
             :check (fn [ctx] {:result (:sum-result ctx)}))]
     (is (= {:result 6}
-           (m {:biff.fx/overrides
+           (m {:biff.fx/handlers
                {:biff.fx/add (fn [_ctx & nums] (apply + nums))}})))))
 
 (deftest machine-non-effect-vector-values-preserved
@@ -138,6 +138,24 @@
   (let [[_ s1] (fx/random-bytes 42 16)
         [_ s2] (fx/random-bytes s1 16)]
     (is (not= s1 s2))))
+
+;; === Module ===
+
+(deftest module-aggregates-fx-handlers
+  (let [modules-var (atom [{:biff.fx/handlers {::double (fn [_ctx n] (* 2 n))}}
+                           {:biff.fx/handlers {::triple (fn [_ctx n] (* 3 n))}}])
+        get-handlers (:biff.fx/get-handlers
+                      ((:biff.core/init (fx/module))
+                       modules-var))
+        handlers-1 (get-handlers)
+        handlers-2 (get-handlers)]
+    (is (identical? handlers-1 handlers-2))
+    (is (= 10 ((get handlers-1 ::double) {} 5)))
+    (is (= 15 ((get handlers-1 ::triple) {} 5)))
+    (swap! modules-var conj {:biff.fx/handlers {::quadruple (fn [_ctx n] (* 4 n))}})
+    (let [handlers-3 (get-handlers)]
+      (is (not (identical? handlers-1 handlers-3)))
+      (is (= 20 ((get handlers-3 ::quadruple) {} 5))))))
 
 ;; === defmachine macro ===
 
@@ -184,30 +202,38 @@
     (is (= {:ctx-keys [:biff.fx/result] :result {:user "data"}}
            (f {:biff.fx/result {:user "data"}})))))
 
-(defmethod fx/handle ::custom-double
-  [_fx-key _ctx n]
-  (* 2 n))
+(deftest machine-uses-context-handlers
+  (let [m (fx/machine ::context-handlers
+             :start (fn [_] {:result [::custom-double 5] :biff.fx/next :done})
+             :done (fn [{:keys [result]}] {:result result}))]
+     (is (= {:result 10}
+           (m {:biff.fx/handlers
+               {::custom-double (fn [_ctx n] (* 2 n))}})))))
 
-(deftest machine-uses-custom-handle-method
-  (let [m (fx/machine ::custom-handle
+(deftest machine-uses-get-handlers
+  (let [m (fx/machine ::get-handlers
             :start (fn [_] {:result [::custom-double 5] :biff.fx/next :done})
             :done (fn [{:keys [result]}] {:result result}))]
     (is (= {:result 10}
-           (m {})))))
+           (m {:biff.fx/get-handlers
+               (fn []
+                 {::custom-double (fn [_ctx n] (* 2 n))})})))))
 
-(deftest overrides-take-precedence-over-handle-method
-  (let [m (fx/machine ::override-test
-            :start (fn [_] {:result [:biff.fx/sleep 0] :biff.fx/next :done})
+(deftest get-handlers-take-precedence-over-context-handlers
+  (let [m (fx/machine ::handler-precedence
+            :start (fn [_] {:result [::custom-double 5] :biff.fx/next :done})
             :done (fn [{:keys [result]}] {:result result}))]
     (is (= {:result :custom}
-           (m {:biff.fx/overrides {:biff.fx/sleep (fn [_ _] :custom)}})))))
+            (m {:biff.fx/handlers {::custom-double (fn [_ctx n] (* 2 n))}
+                :biff.fx/get-handlers (fn []
+                                        {::custom-double (fn [_ctx _n] :custom)})})))))
 
 (deftest machine-filters-underscore-keys-from-fx-output
   (let [m (fx/machine ::underscore-test
             :start (fn [_] {:_internal [:biff.fx/load "x"]
                             :visible [:biff.fx/load "y"]}))]
     (is (= {:visible "loaded-y"}
-           (m {:biff.fx/overrides
+           (m {:biff.fx/handlers
                {:biff.fx/load (fn [_ v] (str "loaded-" v))}})))))
 
 (deftest machine-underscore-keys-available-during-transitions
@@ -216,7 +242,7 @@
                             :biff.fx/next :use-it})
             :use-it (fn [{:keys [_temp]}] {:result (str "used-" _temp)}))]
     (is (= {:result "used-loaded"}
-           (m {:biff.fx/overrides
+           (m {:biff.fx/handlers
                {:biff.fx/load (fn [_ _] "loaded")}})))))
 
 ;; === :biff.fx/return ===
@@ -236,7 +262,7 @@
       (let [m (fx/machine ::return-fx
                 :start (fn [_] {:biff.fx/return [:biff.fx/http {:url "test"}]}))]
         (is (= {:status 200 :body "ok"}
-              (m {:biff.fx/overrides
+              (m {:biff.fx/handlers
                   {:biff.fx/http (fn [_ req] {:status 200 :body "ok"})}}))))))
 
 (deftest machine-return-key-multi-state
@@ -245,7 +271,7 @@
                 :start (fn [_] {:data [:biff.fx/load "x"] :biff.fx/next :finish})
                 :finish (fn [{:keys [data]}] {:biff.fx/return (str "result: " data)}))]
         (is (= "result: loaded"
-              (m {:biff.fx/overrides
+              (m {:biff.fx/handlers
                   {:biff.fx/load (fn [_ _] "loaded")}}))))))
 
 (deftest machine-without-return-key-unchanged

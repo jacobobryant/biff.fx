@@ -45,8 +45,8 @@ Call it like a function:
 ### Effects
 
 Effects are identified by **value**, not by key. If a map entry's value is a
-vector whose first element matches an implemented `com.biffweb.fx/handle`
-dispatch value (or a key in `:biff.fx/overrides`), it's treated as an effect:
+vector whose first element matches a key in `:biff.fx/handlers`, it's treated
+as an effect:
 
 ```clojure
 ;; This entry is an effect — the value is a vector starting with a handle key
@@ -55,31 +55,39 @@ dispatch value (or a key in `:biff.fx/overrides`), it's treated as an effect:
 ;; This entry is NOT an effect — the value is a plain keyword
 {:biff.fx/next :some-state}
 
-;; This is NOT an effect — :not-an-effect isn't handled
+;; This is NOT an effect — :not-an-effect isn't in the handlers map
 {:data [:not-an-effect 1 2 3]}
 ```
 
-Effect implementations are defined with a multimethod:
+Libraries add effect implementations by merging handler fns into
+`:biff.fx/handlers`, often from a public `fx-handlers` var in the library that
+owns those handlers:
 
 ```clojure
-(require '[com.biffweb.fx :as fx])
-
-(defmethod fx/handle :my.app.fx/add
-  [_fx-key ctx & nums]
-  (apply + nums))
+(def fx-handlers
+  {:my.app.fx/add
+   (fn [ctx & nums]
+     (apply + nums))})
 ```
 
 The effect's return value is stored under the map entry's key (e.g.
 `:my-result`) in the context, available to subsequent states.
 
-For tests, you can override effect implementations without redefining the
-multimethod:
+If the handler set needs to be computed dynamically, pass a function under
+`:biff.fx/get-handlers`. It takes precedence over `:biff.fx/handlers`:
 
 ```clojure
 (my-handler
-  {:biff.fx/overrides
-   {:my.app.fx/add (fn [_ctx & nums] 999)}})
+  {:biff.fx/handlers
+   {:my.app.fx/add (fn [_ctx & nums] (apply + nums))}
+   :biff.fx/get-handlers
+   (fn []
+     {:my.app.fx/add (fn [_ctx & nums] 999)})})
 ```
+
+If you're composing Biff modules, include `(fx/module)` in your module list.
+It memoizes a `:biff.fx/get-handlers` function that merges each module's
+top-level `:biff.fx/handlers` map.
 
 ### Naming convention
 
@@ -125,14 +133,16 @@ The returned function has two arities:
 Macro. Defines a machine as a var. Machine name is derived from the namespace
 and symbol.
 
-### `handle [fx-key ctx & args]`
-Multimethod. Define one method per effect keyword.
+### `module []`
+Returns a Biff module that memoizes a merged `:biff.fx/get-handlers` function
+from the active modules' top-level `:biff.fx/handlers` maps.
 
 ## Context keys
 
 | Key | Description |
 |-----|-------------|
-| `:biff.fx/overrides` | Map of effect keyword → function for tests/temporary overrides |
+| `:biff.fx/handlers` | Map of effect keyword → function |
+| `:biff.fx/get-handlers` | Function that returns effect handlers for this machine run |
 | `:biff.fx/next` | Next state keyword (in state return map) |
 | `:biff.fx/now` | Injected `java.time.Instant` before each state |
 | `:biff.fx/seed` | Injected random long seed |

@@ -7,21 +7,21 @@
 
    A machine is created with named state transition functions. Each
    function receives the context map and returns a map where:
-     - Values that are vectors whose first element is an implemented
-       `handle` dispatch key (or a key present in `:biff.fx/overrides`)
-       → that effect is executed, and the result is stored under the map
-       entry's key in the context
+     - Values that are vectors whose first element is a key in
+       `:biff.fx/handlers` → that effect is
+       executed, and the result is stored under the map entry's key in the
+       context
      - :biff.fx/next → the next state to transition to
      - Other keys → merged into context for subsequent states
 
-   Effect handlers are defined with the `handle` multimethod. Tests may
-   override handlers via `:biff.fx/overrides` in the context.
+   Applications and libraries can extend effect dispatch with
+   `:biff.fx/handlers`, or dynamically compute handlers via
+   `:biff.fx/get-handlers`.
    :biff.fx/now is injected as a java.time.Instant before each state runs.
    :biff.fx/seed is injected as a random long seed.
    :biff.fx/results is set from the last trace entry."
   (:require [com.biffweb.fx.impl :as impl])
-  (:import [java.security SecureRandom]
-           [java.util Random UUID]))
+  (:import [java.util Random UUID]))
 
 ;; === Seed-based deterministic randomness ===
 
@@ -41,57 +41,20 @@
     (.nextBytes rng bs)
     [bs (.nextLong rng)]))
 
-;; === Effect dispatch ===
+(def ^:private handlers-for-modules
+  (memoize
+   (fn [modules]
+     (->> modules
+          (keep :biff.fx/handlers)
+          (apply merge {})))))
 
-(defmulti handle
-  "Executes an effect for `fx-key`.
-
-   Libraries can provide effect implementations with:
-
-     (defmethod handle :some.lib.fx/do-thing
-       [_fx-key ctx & args]
-       ...)"
-  (fn [fx-key _ctx & _args] fx-key))
-
-(defmethod handle :biff.fx/http
-  [_fx-key _ctx request-or-requests]
-  (let [hato-request (requiring-resolve 'hato.client/request)
-        http* (fn [request]
-                (try
-                  (-> (hato-request request)
-                      (assoc :url (:url request))
-                      (dissoc :http-client))
-                  (catch Exception e
-                    (if (get request :throw-exceptions true)
-                      (throw e)
-                      {:url (:url request)
-                       :exception e}))))]
-    (if (map? request-or-requests)
-      (http* request-or-requests)
-      (mapv http* request-or-requests))))
-
-(defmethod handle :biff.fx/slurp
-  [_fx-key _ctx & args]
-  (apply slurp args))
-
-(defmethod handle :biff.fx/spit
-  [_fx-key _ctx & args]
-  (apply spit args))
-
-(defmethod handle :biff.fx/sleep
-  [_fx-key _ctx sleep-ms]
-  (Thread/sleep (long sleep-ms)))
-
-(defmethod handle :biff.fx/temp-dir
-  [_fx-key _ctx & {:keys [prefix]}]
-  (let [dir (java.nio.file.Files/createTempDirectory
-             (or prefix "biff")
-             (into-array java.nio.file.attribute.FileAttribute []))]
-    (.toFile dir)))
-
-(defmethod handle :biff.fx/secure-random-int
-  [_fx-key _ctx n]
-  (.nextInt (SecureRandom.) n))
+(defn module
+  []
+  {:biff.core/init
+   (fn [modules-var]
+     {:biff.fx/get-handlers
+      (fn []
+        (handlers-for-modules @modules-var))})})
 
 ;; === Core state machine ===
 
@@ -117,34 +80,41 @@
                                " in machine " machine-name) {})))
       ctx))
     ([ctx]
-     (loop [ctx ctx, state :start, trace []]
-       (let [{:keys [next-state ctx trace state-output fx-output]}
-             (try
-               (impl/step {:state->transition-fn state->transition-fn
-                           :ctx ctx :state state :trace trace})
-               (catch Exception e
-                 (throw
-                  (ex-info "Exception while running biff.fx machine"
-                           {:machine machine-name
-                            :state state
-                            :trace (impl/truncate trace)}
-                           e))))]
-         (if next-state
-           (recur ctx next-state trace)
-           (let [result (merge state-output
-                               (into {} (remove (fn [[k _]] (.startsWith (name k) "_"))) fx-output))]
-             (if (contains? result :biff.fx/return)
-               (:biff.fx/return result)
-               result))))))))
+     (let [handlers (merge impl/default-fx-handlers
+                           (:biff.fx/handlers ctx)
+                           (when-some [get-handlers (:biff.fx/get-handlers ctx)]
+                             (get-handlers)))]
+       (loop [ctx ctx, state :start, trace []]
+         (let [{:keys [next-state ctx trace state-output fx-output]}
+               (try
+                 (impl/step {:state->transition-fn state->transition-fn
+                             :ctx ctx
+                             :state state
+                             :trace trace
+                             :handlers handlers})
+                 (catch Exception e
+                   (throw
+                    (ex-info "Exception while running biff.fx machine"
+                             {:machine machine-name
+                              :state state
+                              :trace (impl/truncate trace)}
+                             e))))]
+           (if next-state
+             (recur ctx next-state trace)
+             (let [result (merge state-output
+                                 (into {} (remove (fn [[k _]] (.startsWith (name k) "_"))) fx-output))]
+               (if (contains? result :biff.fx/return)
+                 (:biff.fx/return result)
+                 result)))))))))
 
 (defmacro defmachine
   "Defines a machine as a var. Machine name keyword is derived from
    the current namespace and the var symbol.
 
-   Usage:
-     (defmachine my-handler
-       :start (fn [ctx] ...)
-       :next-state (fn [ctx] ...))"
-   [sym & args]
-   (let [machine-name (keyword (str *ns*) (str sym))]
-     `(def ~sym (machine ~machine-name ~@args))))
+    Usage:
+      (defmachine my-handler
+        :start (fn [ctx] ...)
+        :next-state (fn [ctx] ...))"
+  [sym & args]
+  (let [machine-name (keyword (str *ns*) (str sym))]
+    `(def ~sym (machine ~machine-name ~@args))))
